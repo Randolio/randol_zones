@@ -4,6 +4,8 @@ local pendingKey
 local pendingSince = 0
 local lastShownAt = 0
 local bannerUntil = 0
+local bannerActive = false
+local watcherRunning = false
 local zoneTypeTown = 1
 local zoneTypeDistrict = 10
 local messageStateNone = 6
@@ -69,17 +71,41 @@ local function getTimeAndTemperature()
     return ('%s | %d:%02d %s'):format(temperatureText, hour, minute, period)
 end
 
+local function setBannerActive(state)
+    if bannerActive == state then return end
+    bannerActive = state
+    TriggerEvent('randol_zones:bannerActive', state)
+end
+
+local function startBannerWatcher()
+    if watcherRunning then return end
+    watcherRunning = true
+
+    CreateThread(function()
+        while bannerActive do
+            Wait(100)
+            if GetGameTimer() >= bannerUntil then
+                setBannerActive(false)
+            end
+        end
+        watcherRunning = false
+    end)
+end
+
 local function isShardActive()
     if not currentShard or GetGameTimer() - lastShownAt > config.duration then return false end
     return getShardState(currentShard) ~= messageStateNone
 end
 
-local function clearShard()
+local function clearShard(silent)
     if currentShard then
         Citizen.InvokeNative(natives.clearFeedMessage, currentShard)
         currentShard = nil
     end
     bannerUntil = 0
+    if not silent then
+        setBannerActive(false)
+    end
 end
 
 local function postShard(titleKey)
@@ -88,7 +114,7 @@ local function postShard(titleKey)
     local subtitlePointer = literalString(getTimeAndTemperature())
 
     if currentShard and getShardState(currentShard) ~= messageStateNone then
-        clearShard()
+        clearShard(true) -- silent: we're about to replace it, so don't fire false -> true
         Wait(150)
     end
 
@@ -104,8 +130,12 @@ local function postShard(titleKey)
     local state = currentShard and getShardState(currentShard)
     local ok = state and state ~= messageStateNone
 
-    if not ok then
+    if ok then
+        setBannerActive(true)
+        startBannerWatcher()
+    else
         bannerUntil = 0
+        setBannerActive(false)
     end
 
     return ok
@@ -143,7 +173,6 @@ CreateThread(function()
             pendingKey = nil
             pendingSince = 0
         end
-        
         lastCoords = coords
 
         local key = resolveZone(coords)
@@ -177,45 +206,47 @@ CreateThread(function()
     end
 end)
 
-exports('isBannerActive', function() return GetGameTimer() < bannerUntil end)
-
--- The above export is used to check for the UiFeedClearAllChannels()/Citizen.InvokeNative(0x6035E8FBCA32AC5E) that clears those shitty toast notifications.
--- Example of how I use it below in my own event management because it fucks with the zone displays for some reason
+-- Below is used to check for the UiFeedClearAllChannels()/Citizen.InvokeNative(0x6035E8FBCA32AC5E) that clears those shitty toast notifications.
+-- Example of how I use it below in my own event manager using an event handler because it fucks with the zone displays for some reason
 
 -- [[
---     local ignoredEvents = {
---         [`EVENT_CHALLENGE_GOAL_COMPLETE`] = true,
---         [`EVENT_CHALLENGE_REWARD`] = true,
---         [`EVENT_CHALLENGE_GOAL_UPDATE`] = true,
---         [`EVENT_DAILY_CHALLENGE_STREAK_COMPLETED`] = true,
---     }
+    -- local bannerActive = false
+    -- local ignoredEvents = {
+    --     [`EVENT_CHALLENGE_GOAL_COMPLETE`] = true,
+    --     [`EVENT_CHALLENGE_REWARD`] = true,
+    --     [`EVENT_CHALLENGE_GOAL_UPDATE`] = true,
+    --     [`EVENT_DAILY_CHALLENGE_STREAK_COMPLETED`] = true,
+    -- }
 
---     CreateThread(function()
---         while true do
---             Wait(0)
+    -- AddEventHandler('randol_zones:bannerActive', function(state)
+    --     bannerActive = state
+    -- end)
 
---             for _, group in ipairs(GROUPS) do
---                 local count = GetNumberOfEvents(group)
---                 if count > 0 then
---                     for i = 0, count - 1 do
---                         local eventHash = GetEventAtIndex(group, i)
---                         if ignoredEvents[eventHash] then
---                             local bannerActive = exports.randol_zones:isBannerActive()
---                             if not bannerActive then
---                                 Citizen.InvokeNative(0x6035E8FBCA32AC5E)
---                             end
---                         end
+    -- CreateThread(function()
+    --     while true do
+    --         Wait(0)
 
---                         local def = HashToEvent[eventHash] or HashToEvent[u32(eventHash)]
---                         if def then
---                             local data = readEventData(group, i, def)
---                             if data then
---                                 TriggerEvent(prefix:format(def.name), data)
---                             end
---                         end
---                     end
---                 end
---             end
---         end
---     end)
+    --         for _, group in ipairs(GROUPS) do
+    --             local count = GetNumberOfEvents(group)
+    --             if count > 0 then
+    --                 for i = 0, count - 1 do
+    --                     local eventHash = GetEventAtIndex(group, i)
+    --                     if ignoredEvents[eventHash] then
+    --                         if not bannerActive then
+    --                             Citizen.InvokeNative(0x6035E8FBCA32AC5E)
+    --                         end
+    --                     end
+
+    --                     local def = HashToEvent[eventHash] or HashToEvent[u32(eventHash)]
+    --                     if def then
+    --                         local data = readEventData(group, i, def)
+    --                         if data then
+    --                             TriggerEvent(prefix:format(def.name), data)
+    --                         end
+    --                     end
+    --                 end
+    --             end
+    --         end
+    --     end
+    -- end)
 -- ]]
